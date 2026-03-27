@@ -9,7 +9,12 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.48",
+    "@ai-sdk/react": "^3.0.141",
     "@base-ui/react": "^1.3.0",
+    "@elevenlabs/client": "^0.16.0",
+    "@heroicons/react": "^2.2.0",
+    "ai": "^6.0.139",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.7.0",
