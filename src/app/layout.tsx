@@ -30,6 +30,10 @@ export const metadata: Metadata = {
     "Full-Stack Developer",
     "Portfolio",
   ],
+  icons: {
+    icon: "/favicon.svg",
+    apple: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
