@@ -7,14 +7,17 @@ const skillGroups = [
   {
     label: "Core Engineering",
     skills: ["Next.js", "React", "Node.js", "TypeScript", "Python", "C++", "PostgreSQL", "SQL", "REST APIs"],
+    bg: "bg-blue-50/60",
   },
   {
     label: "AI & Data",
     skills: ["LLM Integration", "AI Pipelines", "Document Parsing", "Multi-tenant SaaS", "Auth Systems"],
+    bg: "bg-violet-50/60",
   },
   {
     label: "DevOps & Tools",
     skills: ["CI/CD", "Git", "Supabase", "Stripe", "Figma", "NVIDIA Isaac Sim", "Swift/SwiftUI"],
+    bg: "bg-amber-50/60",
   },
 ];
 
@@ -80,7 +83,7 @@ export default function AboutPage() {
           </h2>
           <div className="grid gap-6 md:grid-cols-3">
             {skillGroups.map((group) => (
-              <GlassCard key={group.label} className="hover:border-multroid-blue/30">
+              <GlassCard key={group.label} className={`hover:border-multroid-blue/30 ${group.bg}`}>
                 <h3 className="mb-4 text-xs font-bold uppercase tracking-[0.15em] text-multroid-blue">
                   {group.label}
                 </h3>

@@ -66,8 +66,8 @@ export default function PortfolioPage() {
 
         <section className="grid gap-8 pb-20 md:grid-cols-2">
           {projects.map((project) => (
-            <Link key={project.slug} href={`/portfolio/${project.slug}`} className="block">
-              <GlassCard className="group flex flex-col overflow-hidden !p-0 cursor-pointer hover:shadow-lg">
+            <Link key={project.slug} href={`/portfolio/${project.slug}`} className="block h-full">
+              <GlassCard className="group flex h-full flex-col overflow-hidden !p-0 cursor-pointer hover:shadow-lg">
                 {/* Colored header */}
                 <div
                   className="flex items-center justify-between px-6 py-4"
