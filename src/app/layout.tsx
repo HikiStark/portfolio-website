@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Montserrat, Geist_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PersistentChat } from "@/components/shared/persistent-chat";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 const inter = Inter({
@@ -50,6 +51,7 @@ export default function RootLayout({
         <TooltipProvider>
           {children}
           <PersistentChat />
+          <Analytics />
         </TooltipProvider>
       </body>
     </html>

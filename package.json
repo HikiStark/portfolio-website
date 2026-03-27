@@ -14,6 +14,7 @@
     "@base-ui/react": "^1.3.0",
     "@elevenlabs/client": "^0.16.0",
     "@heroicons/react": "^2.2.0",
+    "@vercel/analytics": "^2.0.1",
     "ai": "^6.0.139",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
