@@ -66,66 +66,49 @@ export default function PortfolioPage() {
 
         <section className="grid gap-8 pb-20 md:grid-cols-2">
           {projects.map((project) => (
-            <GlassCard
-              key={project.slug}
-              className="group flex flex-col overflow-hidden !p-0 hover:shadow-lg"
-            >
-              {/* Colored header */}
-              <div
-                className="flex items-center justify-between px-6 py-4"
-                style={{ backgroundColor: project.color }}
-              >
-                <span className="text-sm font-semibold text-white/80">
-                  {project.type}
-                </span>
-                {project.link !== "#" && (
-                  <a
-                    href={project.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-sm text-white/70 transition-colors hover:text-white"
-                  >
-                    Visit
+            <Link key={project.slug} href={`/portfolio/${project.slug}`} className="block">
+              <GlassCard className="group flex flex-col overflow-hidden !p-0 cursor-pointer hover:shadow-lg">
+                {/* Colored header */}
+                <div
+                  className="flex items-center justify-between px-6 py-4"
+                  style={{ backgroundColor: project.color }}
+                >
+                  <span className="text-sm font-semibold text-white/80">
+                    {project.type}
+                  </span>
+                  <span className="flex items-center gap-1 text-sm text-white/70">
+                    View
                     <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                  </a>
-                )}
-              </div>
-
-              {/* Content */}
-              <div className="flex flex-1 flex-col p-6">
-                <h2 className="text-2xl font-bold text-multroid-dark">
-                  {project.title}
-                </h2>
-                <p className="mt-1 text-sm font-medium text-multroid-blue">
-                  {project.tagline}
-                </p>
-                <p className="mt-3 flex-1 text-sm leading-relaxed text-multroid-grey">
-                  {project.description}
-                </p>
-
-                {/* Tags */}
-                <div className="mt-5 flex flex-wrap gap-2">
-                  {project.tags.map((tag) => (
-                    <Badge
-                      key={tag}
-                      variant="secondary"
-                      className="rounded-full border border-multroid-grey/20 bg-multroid-cloud/80 text-xs font-medium text-multroid-dark backdrop-blur-sm"
-                    >
-                      {tag}
-                    </Badge>
-                  ))}
+                  </span>
                 </div>
 
-                {/* Detail link */}
-                <Link
-                  href={`/portfolio/${project.slug}`}
-                  className="mt-5 inline-flex items-center gap-1 text-sm font-semibold text-multroid-blue transition-colors hover:text-multroid-blue/70"
-                >
-                  View Details
-                  <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                </Link>
-              </div>
-            </GlassCard>
+                {/* Content */}
+                <div className="flex flex-1 flex-col p-6">
+                  <h2 className="text-2xl font-bold text-multroid-dark group-hover:text-multroid-blue transition-colors">
+                    {project.title}
+                  </h2>
+                  <p className="mt-1 text-sm font-medium text-multroid-blue">
+                    {project.tagline}
+                  </p>
+                  <p className="mt-3 flex-1 text-sm leading-relaxed text-multroid-grey">
+                    {project.description}
+                  </p>
+
+                  {/* Tags */}
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    {project.tags.map((tag) => (
+                      <Badge
+                        key={tag}
+                        variant="secondary"
+                        className="rounded-full border border-multroid-grey/20 bg-multroid-cloud/80 text-xs font-medium text-multroid-dark backdrop-blur-sm"
+                      >
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              </GlassCard>
+            </Link>
           ))}
         </section>
       </main>
