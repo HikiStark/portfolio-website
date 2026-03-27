@@ -68,11 +68,11 @@ export default function PortfolioPage() {
           {projects.map((project) => (
             <GlassCard
               key={project.slug}
-              className="group flex flex-col overflow-hidden p-0 hover:shadow-lg"
+              className="group flex flex-col overflow-hidden !p-0 hover:shadow-lg"
             >
               {/* Colored header */}
               <div
-                className="flex items-center justify-between rounded-t-2xl px-6 py-4 sm:rounded-t-3xl"
+                className="flex items-center justify-between px-6 py-4"
                 style={{ backgroundColor: project.color }}
               >
                 <span className="text-sm font-semibold text-white/80">
