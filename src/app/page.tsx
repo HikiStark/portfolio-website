@@ -8,9 +8,19 @@ export default function Home() {
     <div className="relative flex min-h-screen flex-col bg-multroid-cream">
       <Navbar />
 
-      <main className="relative flex flex-1 items-center justify-center overflow-hidden px-4">
+      <main className="relative flex flex-1 flex-col items-center justify-center overflow-hidden px-4">
+        {/* Welcome message */}
+        <div className="mb-8 text-center sm:mb-12">
+          <h1 className="font-heading text-3xl font-bold text-multroid-dark sm:text-4xl lg:text-5xl">
+            Hey, I&rsquo;m <span className="text-multroid-blue">Hiki</span>
+          </h1>
+          <p className="mt-2 text-base text-multroid-grey sm:mt-3 sm:text-lg">
+            Welcome to my portfolio — feel free to look around or ask me anything.
+          </p>
+        </div>
+
         {/* Avatar Image */}
-        <div className="relative h-[350px] w-[280px] sm:h-[500px] sm:w-[400px] md:h-[600px] md:w-[480px] lg:h-[700px] lg:w-[560px]">
+        <div className="relative h-[300px] w-[240px] sm:h-[450px] sm:w-[360px] md:h-[540px] md:w-[430px] lg:h-[620px] lg:w-[500px]">
           <Image
             src="/images/hiki-avatar.png"
             alt="Hikmat Imanov"

@@ -32,7 +32,7 @@ export function ChatOverlay({
     "idle" | "connecting" | "listening" | "speaking"
   >("idle");
   const [isHovered, setIsHovered] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(true);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const conversationRef = useRef<any>(null);
