@@ -1,41 +1,50 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
-import {
-  PaperAirplaneIcon,
-  MicrophoneIcon,
-  SpeakerWaveIcon,
-  XMarkIcon,
-} from "@heroicons/react/24/outline";
-import { MicrophoneIcon as MicSolid } from "@heroicons/react/24/solid";
-import { Conversation } from "@elevenlabs/client";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { ArrowUpIcon, MicrophoneIcon, SpeakerWaveIcon, StopIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { PixelMark } from "@/components/site/logo";
+import { cn } from "@/lib/utils";
 
 interface Message {
+  id?: string;
   role: "user" | "assistant";
   content: string;
+  pending?: boolean;
 }
 
-interface ChatOverlayProps {
-  onStartVoice: () => void;
-  onStopVoice: () => void;
-  isVoiceActive: boolean;
-}
+type VoiceStatus = "idle" | "connecting" | "listening" | "speaking";
 
-export function ChatOverlay({
-  onStartVoice,
-  onStopVoice,
-}: ChatOverlayProps) {
+type VoiceSession = {
+  pc: RTCPeerConnection;
+  dc: RTCDataChannel;
+  mic: MediaStream;
+  audio: HTMLAudioElement;
+  timer: number;
+};
+
+// Subset of OpenAI Realtime server events the bar reacts to.
+type ServerEvent = {
+  type: string;
+  item_id?: string;
+  delta?: string;
+  transcript?: string;
+  error?: { message?: string };
+};
+
+const VOICE_LIMIT_MS = 5 * 60 * 1000;
+const GREETING = "Greet the visitor in one short sentence as Hiki and ask what they would like to know.";
+
+export function ChatOverlay() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState<
-    "idle" | "connecting" | "listening" | "speaking"
-  >("idle");
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("idle");
   const [isHovered, setIsHovered] = useState(false);
   const [isMinimized, setIsMinimized] = useState(true);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const conversationRef = useRef<any>(null);
+  const sessionRef = useRef<VoiceSession | null>(null);
+  // Bumped on every start/stop so a slow connect can tell it was cancelled.
+  const attemptRef = useRef(0);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -50,6 +59,9 @@ export function ChatOverlay({
     if (!text || isLoading) return;
 
     const userMessage: Message = { role: "user", content: text };
+    const history = [...messages, userMessage]
+      .filter((m) => !m.pending && m.content)
+      .map(({ role, content }) => ({ role, content }));
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
@@ -58,7 +70,7 @@ export function ChatOverlay({
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [...messages, userMessage] }),
+        body: JSON.stringify({ messages: history }),
       });
       if (!res.ok) throw new Error("Failed");
 
@@ -80,88 +92,168 @@ export function ChatOverlay({
         }
       }
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Something went wrong. Try again." },
-      ]);
+      setMessages((prev) => [...prev, { role: "assistant", content: "Something went wrong. Try again." }]);
     } finally {
       setIsLoading(false);
     }
   }
 
-  const startConversation = useCallback(async () => {
-    setVoiceStatus("connecting");
-    onStartVoice();
-    try {
-      const res = await fetch("/api/voice");
-      if (!res.ok) throw new Error("Failed");
-      const { agentId } = await res.json();
-
-      const conversation = await Conversation.startSession({
-        agentId: agentId as string,
-        connectionType: "websocket" as const,
-        onConnect: () => setVoiceStatus("listening"),
-        onDisconnect: () => {
-          setVoiceStatus("idle");
-          onStopVoice();
-          conversationRef.current = null;
-        },
-        onError: () => {
-          setVoiceStatus("idle");
-          onStopVoice();
-        },
-        onModeChange: ({ mode }: { mode: string }) =>
-          setVoiceStatus(mode === "speaking" ? "speaking" : "listening"),
-        onMessage: (msg: { source: string; message: string }) => {
-          if (msg.source === "user")
-            setMessages((prev) => [...prev, { role: "user", content: msg.message }]);
-          else if (msg.source === "ai")
-            setMessages((prev) => [...prev, { role: "assistant", content: msg.message }]);
-        },
-      });
-      conversationRef.current = conversation;
-    } catch {
-      setVoiceStatus("idle");
-      onStopVoice();
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Voice unavailable. Use text chat instead." },
-      ]);
+  function handleServerEvent(ev: ServerEvent) {
+    switch (ev.type) {
+      // Placeholder keeps the user's turn above the reply while it transcribes.
+      case "input_audio_buffer.committed":
+        setMessages((prev) => [...prev, { id: ev.item_id, role: "user", content: "", pending: true }]);
+        break;
+      case "conversation.item.input_audio_transcription.completed":
+        setMessages((prev) =>
+          prev.map((m) => (m.id === ev.item_id ? { ...m, content: ev.transcript?.trim() || "…", pending: false } : m)),
+        );
+        break;
+      case "conversation.item.input_audio_transcription.failed":
+        setMessages((prev) => prev.filter((m) => m.id !== ev.item_id));
+        break;
+      case "response.output_audio_transcript.delta":
+        setMessages((prev) => {
+          const i = prev.findIndex((m) => m.id === ev.item_id);
+          if (i === -1) return [...prev, { id: ev.item_id, role: "assistant", content: ev.delta ?? "" }];
+          const next = [...prev];
+          next[i] = { ...next[i], content: next[i].content + (ev.delta ?? "") };
+          return next;
+        });
+        break;
+      case "response.output_audio_transcript.done":
+        setMessages((prev) => prev.map((m) => (m.id === ev.item_id ? { ...m, content: ev.transcript ?? m.content } : m)));
+        break;
+      case "output_audio_buffer.started":
+        setVoiceStatus("speaking");
+        break;
+      case "output_audio_buffer.stopped":
+      case "output_audio_buffer.cleared":
+        setVoiceStatus("listening");
+        break;
+      case "error":
+        console.warn("Realtime error:", ev.error?.message);
+        break;
     }
-  }, [onStartVoice, onStopVoice]);
+  }
 
-  const stopConversation = useCallback(async () => {
-    if (conversationRef.current) {
-      await conversationRef.current.endSession();
-      conversationRef.current = null;
+  function stopConversation() {
+    attemptRef.current++;
+    const session = sessionRef.current;
+    sessionRef.current = null;
+    if (session) {
+      window.clearTimeout(session.timer);
+      session.dc.close();
+      session.mic.getTracks().forEach((t) => t.stop());
+      session.pc.close();
+      session.audio.srcObject = null;
     }
     setVoiceStatus("idle");
-    onStopVoice();
-  }, [onStopVoice]);
+  }
+
+  async function startConversation() {
+    if (sessionRef.current || voiceStatus !== "idle") return;
+    const attempt = ++attemptRef.current;
+    setVoiceStatus("connecting");
+
+    let mic: MediaStream | null = null;
+    let pc: RTCPeerConnection | null = null;
+    const cancelled = () => attempt !== attemptRef.current;
+
+    try {
+      // Ask for the mic first so a denied prompt doesn't mint a session.
+      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (cancelled()) throw new Error("cancelled");
+
+      const tokenRes = await fetch("/api/voice", { method: "POST" });
+      if (!tokenRes.ok) throw new Error("Failed to create voice session");
+      const { value } = (await tokenRes.json()) as { value: string };
+      if (cancelled()) throw new Error("cancelled");
+
+      pc = new RTCPeerConnection();
+      const audio = document.createElement("audio");
+      audio.autoplay = true;
+      pc.ontrack = (e) => {
+        audio.srcObject = e.streams[0];
+      };
+      for (const track of mic.getTracks()) pc.addTrack(track, mic);
+
+      const dc = pc.createDataChannel("oai-events");
+      dc.addEventListener("open", () => {
+        if (cancelled()) return;
+        setVoiceStatus("listening");
+        dc.send(JSON.stringify({ type: "response.create", response: { instructions: GREETING } }));
+      });
+      dc.addEventListener("message", (e) => {
+        if (!cancelled()) handleServerEvent(JSON.parse(e.data) as ServerEvent);
+      });
+      pc.addEventListener("connectionstatechange", () => {
+        if (pc?.connectionState === "failed" || pc?.connectionState === "closed") stopConversation();
+      });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const sdpRes = await fetch("https://api.openai.com/v1/realtime/calls", {
+        method: "POST",
+        body: offer.sdp,
+        headers: { Authorization: `Bearer ${value}`, "Content-Type": "application/sdp" },
+      });
+      if (!sdpRes.ok) throw new Error("Failed to connect voice session");
+      await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
+      if (cancelled()) throw new Error("cancelled");
+
+      const timer = window.setTimeout(stopConversation, VOICE_LIMIT_MS);
+      sessionRef.current = { pc, dc, mic, audio, timer };
+    } catch (err) {
+      mic?.getTracks().forEach((t) => t.stop());
+      pc?.close();
+      if (cancelled()) return;
+      console.warn("Voice error:", err);
+      setVoiceStatus("idle");
+      setMessages((prev) => [...prev, { role: "assistant", content: "Voice unavailable. Use text chat instead." }]);
+    }
+  }
 
   function handleVoiceToggle() {
     if (voiceStatus !== "idle") stopConversation();
     else startConversation();
   }
 
+  // Release the mic and close the WebRTC session if the bar unmounts mid-call.
+  const onUnmount = useEffectEvent(() => {
+    if (sessionRef.current) stopConversation();
+  });
+  useEffect(() => () => onUnmount(), []);
+
   const voiceStatusText =
     voiceStatus === "connecting"
-      ? "Connecting..."
+      ? "Connecting…"
       : voiceStatus === "listening"
-        ? "Listening — speak now..."
+        ? "Listening — speak now"
         : voiceStatus === "speaking"
-          ? "Hiki is speaking..."
+          ? "Hiki is speaking"
           : null;
 
   if (isMinimized) {
     return (
-      <div className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2">
+      <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2 sm:bottom-6">
         <button
+          type="button"
           onClick={() => setIsMinimized(false)}
-          className="flex items-center gap-2 rounded-full border-2 border-multroid-blue/40 bg-multroid-glass px-5 py-3 font-heading text-sm font-semibold text-multroid-blue shadow-[0px_4px_20px_0px_rgba(0,0,0,0.1)] backdrop-blur-md transition-all hover:border-multroid-blue hover:shadow-[0px_4px_20px_0px_rgba(0,0,0,0.2)]"
+          className="flex items-center gap-2.5 rounded-[12px] bg-[linear-gradient(180deg,#3b3b3b_0%,#1b1b1b_100%)] px-4 py-3 text-[15px] font-medium whitespace-nowrap text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_10px_30px_-10px_rgba(0,0,0,0.5)] transition-transform hover:-translate-y-0.5"
         >
-          <MicrophoneIcon className="h-5 w-5" />
-          Ask Hiki anything
+          {voiceStatus !== "idle" ? (
+            <>
+              <span className="size-2.5 animate-pulse bg-brand" />
+              Hiki is live — {voiceStatus === "speaking" ? "speaking" : "listening"}
+            </>
+          ) : (
+            <>
+              <PixelMark className="size-4 text-white" />
+              Ask Hiki anything
+              <MicrophoneIcon className="size-4 stroke-2 text-white/60" />
+            </>
+          )}
         </button>
       </div>
     );
@@ -169,134 +261,136 @@ export function ChatOverlay({
 
   return (
     <div
-      className="fixed bottom-0 left-1/2 z-40 flex w-full max-w-[620px] -translate-x-1/2 flex-col items-center gap-3 px-3 pb-4 pt-2 sm:gap-4 sm:px-4 sm:pb-6"
+      className="fixed bottom-0 left-1/2 z-40 flex w-full max-w-[640px] -translate-x-1/2 flex-col gap-2.5 px-3 pt-2 pb-4 sm:px-4 sm:pb-6"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      {/* Messages area — always visible when there are messages */}
+      {/* Messages */}
       {messages.length > 0 && (
-        <div className="relative w-full">
-          {/* Close button on chat bubbles */}
-          <button
-            onClick={() => setIsMinimized(true)}
-            className="absolute -right-2 -top-2 z-50 flex h-7 w-7 items-center justify-center rounded-full border border-multroid-grey/30 bg-multroid-white/90 text-multroid-grey shadow-sm backdrop-blur-sm transition-all hover:bg-multroid-white hover:text-multroid-dark hover:shadow-md sm:h-8 sm:w-8"
-            aria-label="Close chat"
-          >
-            <XMarkIcon className="h-4 w-4 sm:h-5 sm:w-5" />
-          </button>
-          <div
-            ref={scrollAreaRef}
-            className="flex w-full max-h-[280px] flex-col gap-2 overflow-y-auto rounded-3xl border-2 border-multroid-blue bg-multroid-glass-dark/90 p-4 shadow-[0px_4px_20px_0px_rgba(0,0,0,0.15)] backdrop-blur-md"
-          >
-          {messages.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={`max-w-[85%] rounded-2xl px-4 py-2.5 font-heading text-sm leading-relaxed ${
-                  msg.role === "assistant"
-                    ? "rounded-bl-sm bg-multroid-blue/60 text-multroid-cream"
-                    : "rounded-br-sm bg-multroid-white/20 text-multroid-cream"
-                }`}
-              >
-                {msg.content}
-                {i === messages.length - 1 && msg.role === "assistant" && isLoading && (
-                  <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-multroid-cream" />
-                )}
+        <div className="overflow-hidden rounded-[14px] border border-[#e3e3e3] bg-surface shadow-[0_24px_48px_-24px_rgba(0,0,0,0.3)]">
+          <div className="flex items-center justify-between border-b border-rule py-2 pr-2 pl-4">
+            <span className="flex items-center gap-2 text-[12px] tracking-[0.04em] text-subtle uppercase">
+              <PixelMark className="size-3.5" /> Ask Hiki
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsMinimized(true)}
+              className="flex size-8 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-hover hover:text-ink"
+              aria-label="Minimize chat"
+            >
+              <XMarkIcon className="size-4 stroke-2" />
+            </button>
+          </div>
+          <div ref={scrollAreaRef} className="flex max-h-[300px] flex-col gap-2 overflow-y-auto p-4">
+            {messages.map((msg, i) => (
+              <div key={msg.id ?? i} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
+                <div
+                  className={cn(
+                    "max-w-[85%] rounded-[10px] px-3.5 py-2.5 text-[14.5px] leading-relaxed whitespace-pre-wrap",
+                    msg.role === "assistant" ? "rounded-bl-[3px] bg-canvas text-ink" : "rounded-br-[3px] bg-brand text-white",
+                  )}
+                >
+                  {msg.pending ? <span className="animate-pulse">…</span> : msg.content}
+                  {i === messages.length - 1 && msg.role === "assistant" && isLoading && (
+                    <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-brand align-middle" />
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
           </div>
         </div>
       )}
 
-      {/* Hint text — only on hover when no messages and idle */}
+      {/* Hint — on hover while idle */}
       {!isActive && isHovered && (
-        <div className="w-full animate-in fade-in slide-in-from-bottom-2 duration-200 rounded-3xl border-2 border-multroid-blue bg-multroid-glass-dark/90 p-4 shadow-[0px_4px_20px_0px_rgba(0,0,0,0.15)] backdrop-blur-md">
-          <p className="font-heading text-sm leading-relaxed text-multroid-cream">
-            Hiki will be answering either by text message here or live
-            conversation. Click the microphone to start a live voice chat, or
-            type your question below.
+        <div className="rounded-[14px] border border-[#e3e3e3] bg-surface p-4 shadow-[0_16px_32px_-20px_rgba(0,0,0,0.3)] animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <p className="text-[14px] leading-relaxed text-body">
+            Hiki answers by text here or in a live voice conversation. Click the microphone to talk, or type your
+            question below.
           </p>
         </div>
       )}
 
       {/* Voice status */}
       {voiceStatusText && (
-        <div className="flex w-full items-center gap-3 rounded-2xl border-2 border-multroid-blue bg-multroid-glass-dark/90 px-4 py-3 backdrop-blur-md">
+        <div className="flex items-center gap-3 rounded-[12px] border border-[#e3e3e3] bg-surface py-2 pr-2 pl-4 shadow-[0_16px_32px_-20px_rgba(0,0,0,0.3)]">
           <span
-            className={`h-3 w-3 shrink-0 rounded-full ${
-              voiceStatus === "speaking"
-                ? "animate-pulse bg-green-400"
-                : voiceStatus === "listening"
-                  ? "animate-pulse bg-red-400"
-                  : "bg-yellow-400"
-            }`}
+            className={cn(
+              "size-2.5 shrink-0",
+              voiceStatus === "connecting" ? "animate-pulse bg-subtle" : "animate-pulse bg-brand",
+            )}
           />
-          <p className="font-heading text-sm text-multroid-cream">{voiceStatusText}</p>
+          <p className="flex-1 text-[14px] text-ink">{voiceStatusText}</p>
+          <button
+            type="button"
+            onClick={stopConversation}
+            className="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-body transition-colors hover:bg-hover hover:text-ink"
+          >
+            <StopIcon className="size-4 stroke-2" /> End
+          </button>
         </div>
       )}
 
-      {/* Input Bar — glass effect */}
-      <div className="flex w-full items-center gap-2.5">
-        <div className="flex flex-1 items-center rounded-3xl border-2 border-multroid-blue/40 bg-multroid-glass p-4 shadow-[0px_4px_20px_0px_rgba(0,0,0,0.08)] backdrop-blur-md transition-all hover:border-multroid-blue hover:shadow-[0px_4px_20px_0px_rgba(0,0,0,0.15)]">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSend();
-            }}
-            className="flex flex-1 items-center"
+      {/* Input bar */}
+      <div className="flex w-full items-center gap-2">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSend();
+          }}
+          className="flex flex-1 items-center gap-2 rounded-[12px] border border-[#e3e3e3] bg-surface p-1.5 pl-4 shadow-[0_12px_32px_-16px_rgba(0,0,0,0.35)] transition-colors focus-within:border-brand/50"
+        >
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask Hiki anything…"
+            aria-label="Message Hiki"
+            disabled={voiceStatus !== "idle"}
+            className="h-9 min-w-0 flex-1 bg-transparent text-[15px] text-ink placeholder:text-subtle focus:outline-none disabled:opacity-40"
+          />
+          <button
+            type="submit"
+            aria-label="Send"
+            disabled={isLoading || !input.trim() || voiceStatus !== "idle"}
+            className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-[linear-gradient(180deg,#3b3b3b_0%,#1b1b1b_100%)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] transition-opacity disabled:opacity-30"
           >
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask Hiki anything..."
-              disabled={voiceStatus !== "idle"}
-              className="min-w-0 flex-1 bg-transparent font-heading text-base text-multroid-blue placeholder:text-multroid-blue/50 focus:outline-none disabled:opacity-40"
-            />
-            <button
-              type="submit"
-              disabled={isLoading || !input.trim() || voiceStatus !== "idle"}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-multroid-blue transition-colors hover:bg-multroid-blue/10 disabled:opacity-30"
-            >
-              <PaperAirplaneIcon className="h-5 w-5" />
-            </button>
-          </form>
-        </div>
+            <ArrowUpIcon className="size-4 stroke-2" />
+          </button>
+        </form>
 
-        {/* Voice Button */}
+        {/* Voice button */}
         <div className="group relative shrink-0">
           <button
             type="button"
             onClick={handleVoiceToggle}
             disabled={isLoading}
-            className={`flex items-center rounded-3xl border-2 p-4 shadow-[0px_4px_20px_0px_rgba(0,0,0,0.08)] backdrop-blur-md transition-all disabled:opacity-40 ${
-              voiceStatus === "listening"
-                ? "animate-pulse border-red-500 bg-red-500 text-white"
-                : voiceStatus === "speaking"
-                  ? "border-multroid-blue bg-multroid-blue text-multroid-white"
-                  : voiceStatus === "connecting"
-                    ? "border-yellow-500 bg-yellow-500/20 text-yellow-600"
-                    : "border-multroid-blue/40 bg-multroid-glass text-multroid-blue hover:border-multroid-blue hover:shadow-[0px_4px_20px_0px_rgba(0,0,0,0.15)]"
-            }`}
+            aria-label={voiceStatus === "idle" ? "Start voice conversation" : "End voice conversation"}
+            className={cn(
+              "flex size-[50px] items-center justify-center rounded-[12px] border shadow-[0_12px_32px_-16px_rgba(0,0,0,0.35)] transition-colors disabled:opacity-40",
+              voiceStatus === "idle" && "border-[#e3e3e3] bg-surface text-brand hover:border-brand/50",
+              voiceStatus === "connecting" && "border-[#e3e3e3] bg-surface text-subtle",
+              (voiceStatus === "listening" || voiceStatus === "speaking") && "border-brand bg-brand text-white",
+            )}
           >
-            {voiceStatus === "listening" ? (
-              <MicSolid className="h-6 w-6 sm:h-8 sm:w-8" />
-            ) : voiceStatus === "speaking" ? (
-              <SpeakerWaveIcon className="h-6 w-6 sm:h-8 sm:w-8 animate-pulse" />
+            {voiceStatus === "speaking" ? (
+              <SpeakerWaveIcon className="size-6 animate-pulse" />
+            ) : voiceStatus === "connecting" ? (
+              <span className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
             ) : (
-              <MicrophoneIcon className="h-6 w-6 sm:h-8 sm:w-8" />
+              <MicrophoneIcon className={cn("size-6", voiceStatus === "listening" && "animate-pulse")} />
             )}
           </button>
 
-          {/* CTA label — appears to the left on hover, hidden on mobile */}
+          {/* CTA label — left of the mic on hover, hidden on mobile */}
           {!isActive && isHovered && (
-            <div className="pointer-events-none absolute right-full top-1/2 mr-3 hidden -translate-y-1/2 animate-in fade-in slide-in-from-right-2 duration-200 sm:block">
-              <div className="flex items-center gap-2">
-                <span className="whitespace-nowrap rounded-2xl bg-multroid-blue px-5 py-2.5 text-sm font-bold text-white shadow-lg">
+            <div className="pointer-events-none absolute top-1/2 right-full mr-3 hidden -translate-y-1/2 animate-in fade-in slide-in-from-right-2 duration-200 sm:block">
+              <div className="flex items-center">
+                <span className="rounded-[9px] bg-ink px-3.5 py-2 text-[13px] font-medium whitespace-nowrap text-white shadow-lg">
                   Talk to Hiki live
                 </span>
-                <svg width="8" height="14" viewBox="0 0 8 14" className="text-multroid-blue">
-                  <path d="M8 7L0 0v14z" fill="currentColor" />
+                <svg width="6" height="12" viewBox="0 0 6 12" className="text-ink">
+                  <path d="M6 6L0 0v12z" fill="currentColor" />
                 </svg>
               </div>
             </div>
